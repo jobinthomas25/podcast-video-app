@@ -12,22 +12,35 @@ export default function Home() {
   const handleSubmit = async () => {
     if (!file) return alert('Please upload an audio file.');
     setStatus('processing');
-    setProgress('Uploading and transcribing audio...');
-
-    const formData = new FormData();
-    formData.append('audio', file);
-    formData.append('title', title || 'Episode');
-    formData.append('chapters', JSON.stringify([]));
+    setProgress('Getting upload URL...');
 
     try {
-      const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
+      // Step 1: Get presigned S3 upload URL
+      const urlRes = await fetch('/api/upload-url');
+      const { uploadUrl, filename } = await urlRes.json();
+
+      // Step 2: Upload audio directly to S3
+      setProgress('Uploading audio to cloud...');
+      await fetch(uploadUrl, {
+        method: 'PUT',
+        body: file,
+        headers: { 'Content-Type': 'audio/mpeg' },
+      });
+
+      // Step 3: Trigger transcription and render
+      setProgress('Transcribing audio...');
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, title: title || 'Episode' }),
+      });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
       setResult(data);
       setProgress('Rendering video in cloud...');
 
-      // Poll for render completion
+      // Step 4: Poll for render completion
       const pollInterval = setInterval(async () => {
         const pollRes = await fetch(`/api/render-status?renderId=${data.renderId}&bucketName=${data.bucketName}`);
         const pollData = await pollRes.json();
@@ -38,9 +51,10 @@ export default function Home() {
           setStatus('done');
         } else if (pollData.error) {
           clearInterval(pollInterval);
-          throw new Error(pollData.error);
+          alert('Render error: ' + pollData.error);
+          setStatus('idle');
         } else {
-          setProgress(`Rendering... ${Math.round(pollData.progress * 100)}%`);
+          setProgress(`Rendering... ${Math.round((pollData.progress || 0) * 100)}%`);
         }
       }, 5000);
 
@@ -67,7 +81,7 @@ export default function Home() {
             </div>
           )}
         </div>
-        <a href={downloadUrl} download style={{ display: 'inline-block', backgroundColor: '#F5A623', color: '#111', padding: '16px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold', textDecoration: 'none', marginBottom: 16 }}>
+        <a href={downloadUrl} target="_blank" style={{ display: 'inline-block', backgroundColor: '#F5A623', color: '#111', padding: '16px 32px', borderRadius: 8, fontSize: 18, fontWeight: 'bold', textDecoration: 'none', marginBottom: 16 }}>
           ⬇️ Download MP4
         </a>
         <br />

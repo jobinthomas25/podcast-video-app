@@ -1,46 +1,41 @@
 import { AssemblyAI } from 'assemblyai';
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
-import { tmpdir } from 'os';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { renderMediaOnLambda } from '@remotion/lambda/client';
-
-const s3 = new S3Client({ region: process.env.AWS_REGION });
 
 export async function POST(request) {
   try {
-    const formData = await request.formData();
-    const audio = formData.get('audio');
-    const title = formData.get('title') || 'Episode';
+    const body = await request.json();
+    const { filename, title } = body;
 
-    const bytes = await audio.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    const filename = `podcast-${Date.now()}.mp3`;
-    const tmpPath = join(tmpdir(), filename);
-    await writeFile(tmpPath, buffer);
-
-    await s3.send(new PutObjectCommand({
-      Bucket: process.env.REMOTION_BUCKET,
-      Key: `sites/podcast-video/public/${filename}`,
-      Body: buffer,
-      ContentType: 'audio/mpeg',
-    }));
+    const audioUrl = `https://${process.env.REMOTION_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/sites/podcast-video/public/${filename}`;
 
     const client = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY });
     const transcript = await client.transcripts.transcribe({
-  audio: tmpPath,
-  auto_chapters: true,
-  punctuate: true,
-});
+      audio: audioUrl,
+      auto_chapters: true,
+      punctuate: true,
+    });
 
-    const segments = transcript.sentences ? transcript.sentences.map(s => ({
-  text: s.text,
-  start: s.start,
-  end: s.end,
-})) : [];
-console.log('First 3 segments:', JSON.stringify(segments.slice(0, 3)));
+    const segments = [];
+if (transcript.words && transcript.words.length > 0) {
+  let current = null;
+  for (const word of transcript.words) {
+    if (!current) {
+      current = { text: word.text, start: word.start, end: word.end };
+    } else if (word.start - current.end > 1000 || current.text.split(' ').length >= 12) {
+      segments.push(current);
+      current = { text: word.text, start: word.start, end: word.end };
+    } else {
+      current.text += ' ' + word.text;
+      current.end = word.end;
+    }
+  }
+  if (current) segments.push(current);
+}
+
+    console.log('First segment:', JSON.stringify(segments[0]));
+
     const autoChapters = transcript.chapters ? transcript.chapters.map(ch => ({
-      title: ch.headline,
+      title: ch.gist,
       start: Math.floor((ch.start / 1000) * 30),
       end: Math.floor((ch.end / 1000) * 30),
     })) : [];
