@@ -1,6 +1,7 @@
 import { AssemblyAI } from 'assemblyai';
 import { renderMediaOnLambda } from '@remotion/lambda/client';
 
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -39,18 +40,26 @@ if (transcript.words && transcript.words.length > 0) {
       start: Math.floor((ch.start / 1000) * 30),
       end: Math.floor((ch.end / 1000) * 30),
     })) : [];
-
+// Extract hook sentences using Claude
+// Extract hook lines from transcript automatically
+const allSentences = segments.map(s => s.text).filter(t => t.split(' ').length > 6 && t.split(' ').length < 20);
+const midPoint = Math.floor(allSentences.length / 2);
+const hookLines = [
+  allSentences[3] || allSentences[0],
+  allSentences[midPoint] || allSentences[1],
+  allSentences[allSentences.length - 4] || allSentences[2],
+].filter(Boolean);
     const { renderId, bucketName } = await renderMediaOnLambda({
       region: process.env.AWS_REGION,
       functionName: process.env.REMOTION_FUNCTION,
       serveUrl: `https://${process.env.REMOTION_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/sites/podcast-video/index.html`,
       composition: 'MyComp',
-      inputProps: { segments, title, chapters: autoChapters, audioFile: filename },
+      inputProps: { segments, title, chapters: autoChapters, audioFile: filename, hookLines },
       codec: 'h264',
       framesPerLambda: 200,
     });
 
-    return Response.json({ renderId, bucketName, segments, title, chapters: autoChapters });
+    return Response.json({ renderId, bucketName, segments, title, chapters: autoChapters, hookLines });
   } catch (err) {
     console.error(err);
     return Response.json({ error: err.message }, { status: 500 });
